@@ -1,7 +1,7 @@
 # Building the binary of the App
 FROM golang:1.23-alpine AS build
 
-ARG APP
+ARG APP=sms-gateway-server
 ARG APP_VERSION=1.0.0
 ARG APP_RELEASE_ID=1
 WORKDIR /go/src
@@ -45,7 +45,7 @@ EXPOSE 3000
 
 USER guest
 
-ENTRYPOINT ["/docker-entrypoint.sh"]
+ENTRYPOINT ["/qq-entrypoint.sh"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD curl -fs http://localhost:3000/health
