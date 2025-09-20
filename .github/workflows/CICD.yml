@@ -1,0 +1,143 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  create-or-update-tag:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 0
+
+    - name: Set up Git
+      run: |
+        git config --global user.name "${{ github.actor }}"
+        git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+
+    - name: Get latest tag
+      id: get_tag
+      run: |
+        TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+        echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+    - name: Increment tag or create new tag
+      id: increment_tag
+      run: |
+        TAG="${{ steps.get_tag.outputs.tag }}"
+        if [ "$TAG" == "v0.0.0" ]; then
+          NEW_TAG="v1.0.0"
+        else
+          TAG_WITHOUT_V="${TAG#v}"
+          major=$(echo "$TAG_WITHOUT_V" | cut -d '.' -f1)
+          minor=$(echo "$TAG_WITHOUT_V" | cut -d '.' -f2)
+          patch=$(echo "$TAG_WITHOUT_V" | cut -d '.' -f3)
+          PATCH=$((patch + 1))
+          NEW_TAG="v$major.$minor.$PATCH"
+        fi
+        echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
+
+    - name: Create and push new tag
+      run: |
+        NEW_TAG="${{ steps.increment_tag.outputs.new_tag }}"
+        git tag "$NEW_TAG"
+        git push https://${{ secrets.PERSONAL_ACCESS_TOKEN }}@github.com/${{ github.repository }}.git --tags
+
+  build:
+    runs-on: ubuntu-latest
+    needs: create-or-update-tag
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Get latest tag
+        id: get_tag
+        run: |
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          file: ./build/Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/${{ secrets.DOCKER_APP_NAME }}:latest
+            ${{ secrets.DOCKER_USERNAME }}/${{ secrets.DOCKER_APP_NAME }}:${{ steps.get_tag.outputs.tag }}
+
+  notify-sysops:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Get latest tag
+        id: get_tag
+        run: |
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Extract repo name
+        run: |
+          REPO_NAME=$(basename $GITHUB_REPOSITORY)
+          echo "REPO_NAME=${REPO_NAME}" >> $GITHUB_ENV
+
+      - name: Checkout SysOps Repo
+        run: |
+          git clone https://${{ secrets.PERSONAL_ACCESS_TOKEN }}@github.com/chisdev/bookie-sysops-stg.git
+          cd bookie-sysops-stg
+          git config --global user.name "ChisTrun"
+          git config --global user.email "vochitrung.dev@gmail.com"
+
+      - name: Create Branch & Update Dockerfile
+        run: |
+          cd bookie-sysops-stg
+          BRANCH_NAME="update-${{ env.REPO_NAME }}-${{ steps.get_tag.outputs.tag }}"
+
+          if git ls-remote --heads origin $BRANCH_NAME | grep $BRANCH_NAME; then
+            git checkout $BRANCH_NAME
+            git pull --rebase origin $BRANCH_NAME
+          else
+            git checkout -b $BRANCH_NAME
+          fi
+
+          sed -i "s|\(FROM .*:\)[^ ]*|\1${{ steps.get_tag.outputs.tag }}|g" backend/${{ env.REPO_NAME }}/build/Dockerfile
+
+          git add .
+          git commit -m "Update ${{ env.REPO_NAME }} to tag ${{ steps.get_tag.outputs.tag }}"
+          git push origin $BRANCH_NAME
+
+      - name: Install GitHub CLI
+        run: sudo apt-get install -y gh
+
+      - name: Create Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+        run: |
+          cd bookie-sysops-stg
+          BRANCH_NAME="update-${{ env.REPO_NAME }}-${{ steps.get_tag.outputs.tag }}"
+          gh pr create --title "Update ${{ env.REPO_NAME }} to tag ${{ steps.get_tag.outputs.tag }}" \
+                       --body "Automated PR to update ${{ env.REPO_NAME }} image version to ${{ steps.get_tag.outputs.tag }}" \
+                       --base main \
+                       --head "$BRANCH_NAME" \
+                       --repo "chisdev/bookie-sysops-stg"
