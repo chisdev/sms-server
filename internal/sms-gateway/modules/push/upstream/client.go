@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sync"
 
 	"github.com/android-sms-gateway/client-go/smsgateway"
@@ -19,13 +20,21 @@ const BASE_URL = "https://sms.bookiepals.com"
 type Client struct {
 	options map[string]string
 
-	client *http.Client
-	mux    sync.Mutex
+	client  *http.Client
+	mux     sync.Mutex
+	baseUrl string
 }
 
 func New(options map[string]string) (*Client, error) {
+	baseURL := os.Getenv("BASE_URL")
+	if baseURL == "" {
+		// fallback nếu biến môi trường chưa được set
+		baseURL = BASE_URL
+	}
+
 	return &Client{
 		options: options,
+		baseUrl: baseURL,
 	}, nil
 }
 
@@ -59,7 +68,7 @@ func (c *Client) Send(ctx context.Context, messages map[string]types.Event) (map
 		return nil, fmt.Errorf("can't marshal payload: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, BASE_URL+"/push", bytes.NewReader(payloadBytes))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseUrl+"/push", bytes.NewReader(payloadBytes))
 	if err != nil {
 		return nil, fmt.Errorf("can't create request: %w", err)
 	}
