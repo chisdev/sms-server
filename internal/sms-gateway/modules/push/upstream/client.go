@@ -14,7 +14,7 @@ import (
 	"github.com/capcom6/go-helpers/maps"
 )
 
-const BASE_URL = "https://sms.skillsharp-sk.icu"
+const BASE_URL = "https://sms.bookiepals.com"
 
 type Client struct {
 	options map[string]string
